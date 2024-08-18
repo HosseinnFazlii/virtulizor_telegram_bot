@@ -125,3 +125,35 @@ STATIC_URL = '/static/'
 # https://docs.djangoproject.com/en/3.2/ref/settings/#default-auto-field
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
+
+
+
+# your_project/settings.py
+
+# Celery settings
+CELERY_BROKER_URL = 'redis://localhost:6379/0'  # Using Redis as the message broker
+CELERY_RESULT_BACKEND = 'redis://localhost:6379/0'
+CELERY_ACCEPT_CONTENT = ['json']
+CELERY_TASK_SERIALIZER = 'json'
+CELERY_RESULT_SERIALIZER = 'json'
+CELERY_TIMEZONE = 'UTC'
+
+# For periodic tasks
+from celery.schedules import crontab
+
+CELERY_BEAT_SCHEDULE = {
+    'fetch-vps-info-every-5-minutes': {
+        'task': 'fetchdata.tasks.fetch_all_vps_info_task',
+        'schedule': crontab(minute='*/5'),  # Executes every 5 minutes
+    },
+}
+
+
+
+# your_project/settings.py
+
+# Telegram bot settings
+TELEGRAM_BOT_TOKEN = '7523741686:AAH1LGd4XPPVpIYKggmIJ53u1rzKyDtbx-Q'
+SUPERADMIN_TELEGRAM_IDS = [
+    '185097996',
+]

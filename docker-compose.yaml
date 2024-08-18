@@ -1,22 +1,42 @@
-version: '3.8'
-
+  
 services:
   backend:
     build: .
     container_name: irvps-bot
     command: python manage.py runserver 0.0.0.0:8000
     volumes:
-      - ./:/app
+    - ./:/app
     ports:
       - "8000:8000"
     env_file:  # Add this line
       - .env   # A
+
     depends_on:
       - redis
-      
-    
+      - celery_worker
+      - celery_beat
 
   redis:
     image: redis:latest
 
-  
+  celery_worker:
+    build: .
+    command: celery -A monitoring worker --loglevel=info
+    volumes:
+      - .:/app
+    depends_on:
+      - redis
+    environment:
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+
+  celery_beat:
+    build: .
+    command: celery -A monitoring beat --loglevel=info
+    volumes:
+      - .:/app
+    depends_on:
+      - redis
+    environment:
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0

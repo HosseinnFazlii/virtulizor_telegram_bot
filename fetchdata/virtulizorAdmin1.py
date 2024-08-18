@@ -5,12 +5,12 @@ import re
 import pickle
 
 class c:
-    def __init__(self, ip, key, password, port=4085):
+    def __init__(self, ip, key, password, port=4084):
         self.key = key
         self.password = password
         self.ip = ip
         self.port = port
-        self.protocol = 'https' if port == 4085 else 'http'
+        self.protocol ='http'
         self.error = []
 
     def r(self, data):

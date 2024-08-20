@@ -1,8 +1,11 @@
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters
 from django.conf import settings
 from asgiref.sync import sync_to_async
 from fetchdata.models import Datacenter, VpsInfo
+from .managevps import add_bandwidth_to_vps
+from datetime import datetime, timedelta
+import logging
 
 # Initialize the bot with the token from the settings
 application = Application.builder().token(settings.TELEGRAM_BOT_TOKEN).build()
@@ -12,37 +15,70 @@ def is_superadmin(telegram_id):
 
 async def start(update: Update, context):
     telegram_id = update.message.from_user.id
-    keyboard = [[InlineKeyboardButton("Register Server", callback_data='register_server')]]
+
+    # Create a custom keyboard with buttons
+    keyboard = [
+        [KeyboardButton("Register Server"), KeyboardButton("My Servers")],
+    ]
 
     if is_superadmin(telegram_id):
-        keyboard.append([InlineKeyboardButton("Admin Features", callback_data='admin_features')])
+        keyboard.append([KeyboardButton("Add Bandwidth"), KeyboardButton("Renewal Server")])
 
-    reply_markup = InlineKeyboardMarkup(keyboard)
+    reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+
     await update.message.reply_text('Welcome! Please choose an option:', reply_markup=reply_markup)
 
-async def register_server(update: Update, context):
-    query = update.callback_query
-    await query.answer()
-
-    # Fetch data centers asynchronously
+async def handle_register_server_button(update: Update, context):
+    # Show data centers after clicking "Register Server" button
     datacenters = await sync_to_async(list)(Datacenter.objects.all())
-    keyboard = [[InlineKeyboardButton(dc.name, callback_data=f'dc_{dc.id}') for dc in datacenters]]
+    keyboard = [[InlineKeyboardButton(dc.name, callback_data=f'register_dc_{dc.id}') for dc in datacenters]]
     reply_markup = InlineKeyboardMarkup(keyboard)
 
-    await query.edit_message_text(text="Please assign your data center:", reply_markup=reply_markup)
+    await update.message.reply_text("Please select your data center:", reply_markup=reply_markup)
+
+async def handle_my_servers_button(update: Update, context):
+    # Show data centers after clicking "My Servers" button
+    datacenters = await sync_to_async(list)(Datacenter.objects.all())
+    keyboard = [[InlineKeyboardButton(dc.name, callback_data=f'servers_dc_{dc.id}') for dc in datacenters]]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
+    await update.message.reply_text("Please select the data center to view your servers:", reply_markup=reply_markup)
 
 async def handle_datacenter_selection(update: Update, context):
     query = update.callback_query
     await query.answer()
 
-    # Extract datacenter ID
-    datacenter_id = int(query.data.split('_')[1])
-    context.user_data['datacenter_id'] = datacenter_id
+    datacenter_id = int(query.data.split('_')[-1])
+    if 'register_dc' in query.data:
+        context.user_data['datacenter_id'] = datacenter_id
+        await query.edit_message_text(text="Please send the IP address of the server:")
+        context.user_data['awaiting_ip'] = True
 
-    await query.edit_message_text(text="Please send the IP address of the server:")
+    elif 'servers_dc' in query.data:
+        telegram_id = query.from_user.id
+        context.user_data['datacenter_id'] = datacenter_id
 
-    # Move to the next stage where we expect an IP address as a message
-    context.user_data['awaiting_ip'] = True
+        # Fetch the VpsInfo objects asynchronously and prefetch related data
+        vps_infos = await sync_to_async(list)(
+            VpsInfo.objects.filter(datacenter_id=datacenter_id, telegram_id=telegram_id).select_related('datacenter')
+        )
+
+        if vps_infos:
+            response = "Your registered servers:\n"
+            for vps in vps_infos:
+                response += (
+                    f"\n📅 Start Date: {vps.start_date}\n"
+                    f"📅 End Date: {vps.end_date}\n"
+                    f"🌐 IP Address: {vps.ip}\n"
+                    f"📊 Used Bandwidth: {vps.used_bandwidth} MB\n"
+                    f"📊 Limit Bandwidth: {vps.limit_bandwidth} MB\n"
+                    f"🏢 Data Center: {vps.datacenter.name}\n"
+                    f"-----------------------------"
+                )
+        else:
+            response = "No servers found in this data center."
+
+        await query.edit_message_text(text=response)
 
 async def handle_ip_address(update: Update, context):
     if context.user_data.get('awaiting_ip'):
@@ -64,27 +100,133 @@ async def handle_ip_address(update: Update, context):
         finally:
             # Reset the state
             context.user_data['awaiting_ip'] = False
-    else:
-        await update.message.reply_text("Please start the registration process by selecting a data center.")
+    elif context.user_data.get('awaiting_ip_for_bandwidth'):
+        ip_address = update.message.text
+        context.user_data['ip_address'] = ip_address
+        context.user_data['awaiting_ip_for_bandwidth'] = False
 
-async def admin_features(update: Update, context):
+        # Present predefined bandwidth options
+        keyboard = [
+            [InlineKeyboardButton("0.25 TB", callback_data="bandwidth_0.25"),
+             InlineKeyboardButton("0.5 TB", callback_data="bandwidth_0.5")],
+            [InlineKeyboardButton("1 TB", callback_data="bandwidth_1"),
+             InlineKeyboardButton("2 TB", callback_data="bandwidth_2")],
+            [InlineKeyboardButton("4 TB", callback_data="bandwidth_4"),
+             InlineKeyboardButton("8 TB", callback_data="bandwidth_8")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await update.message.reply_text("Please select the additional bandwidth to add:", reply_markup=reply_markup)
+    elif context.user_data.get('awaiting_ip_for_renewal'):
+        ip_address = update.message.text
+        context.user_data['ip_address'] = ip_address
+        context.user_data['awaiting_ip_for_renewal'] = False
+
+        # Present renewal options
+        keyboard = [
+            [InlineKeyboardButton("30 days", callback_data="renewal_30"),
+             InlineKeyboardButton("60 days", callback_data="renewal_60")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await update.message.reply_text("Please select the renewal period:", reply_markup=reply_markup)
+    else:
+        await update.message.reply_text("Please start the process by selecting an option from the menu.")
+
+async def handle_bandwidth_selection(update: Update, context):
     query = update.callback_query
     await query.answer()
 
-    # Check if the user is a superadmin
-    telegram_id = query.from_user.id
-    if is_superadmin(telegram_id):
-        await query.edit_message_text(text="Superadmin: Here are your features...")
-        # Add more admin features here
+    bandwidth_tb = float(query.data.split('_')[-1])
+    additional_bandwidth_gb = bandwidth_tb * 1000  # Convert TB to GB
+    datacenter_id = context.user_data.get('datacenter_id')
+    ip_address = context.user_data.get('ip_address')
+
+    datacenter = await sync_to_async(Datacenter.objects.get)(id=datacenter_id)
+    result = await sync_to_async(add_bandwidth_to_vps)(datacenter, ip_address, additional_bandwidth_gb)
+
+    if result["success"]:
+        await query.edit_message_text(f"Successfully updated bandwidth: {result['message']}")
     else:
-        await query.edit_message_text(text="Unauthorized access.")
+        await query.edit_message_text(f"Error: {result['error']}")
+
+async def handle_renewal_selection(update: Update, context):
+    query = update.callback_query
+    await query.answer()
+
+    renewal_days = int(query.data.split('_')[-1])
+    ip_address = context.user_data.get('ip_address')
+    datacenter_id = context.user_data.get('datacenter_id')
+
+    try:
+        # Fetch the VPS information asynchronously
+        vps_info = await sync_to_async(VpsInfo.objects.get)(datacenter_id=datacenter_id, ip=ip_address)
+
+        # Update the end date
+        vps_info.end_date += timedelta(days=renewal_days)
+        await sync_to_async(vps_info.save)()
+
+        await query.edit_message_text(f"VPS with IP {ip_address} has been renewed for {renewal_days} days. New end date: {vps_info.end_date}")
+
+    except VpsInfo.DoesNotExist:
+        await query.edit_message_text("No matching server found with that IP address.")
+
+async def handle_add_bandwidth_button(update: Update, context):
+    telegram_id = update.message.from_user.id
+    if not is_superadmin(telegram_id):
+        await update.message.reply_text("You do not have permission to use this command.")
+        return
+
+    # Show data centers after clicking "Add Bandwidth" button
+    datacenters = await sync_to_async(list)(Datacenter.objects.all())
+    keyboard = [[InlineKeyboardButton(dc.name, callback_data=f'addbandwidth_dc_{dc.id}') for dc in datacenters]]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
+    await update.message.reply_text("Please select the data center:", reply_markup=reply_markup)
+
+async def handle_add_bandwidth_datacenter_selection(update: Update, context):
+    query = update.callback_query
+    await query.answer()
+
+    datacenter_id = int(query.data.split('_')[-1])
+    context.user_data['datacenter_id'] = datacenter_id
+    context.user_data['awaiting_ip_for_bandwidth'] = True
+
+    await query.edit_message_text(text="Please send the IP address of the VPS:")
+
+async def handle_renewal_button(update: Update, context):
+    telegram_id = update.message.from_user.id
+    if not is_superadmin(telegram_id):
+        await update.message.reply_text("You do not have permission to use this command.")
+        return
+
+    # Show data centers after clicking "Renewal Server" button
+    datacenters = await sync_to_async(list)(Datacenter.objects.all())
+    keyboard = [[InlineKeyboardButton(dc.name, callback_data=f'renewal_dc_{dc.id}') for dc in datacenters]]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
+    await update.message.reply_text("Please select the data center:", reply_markup=reply_markup)
+
+async def handle_renewal_datacenter_selection(update: Update, context):
+    query = update.callback_query
+    await query.answer()
+
+    datacenter_id = int(query.data.split('_')[-1])
+    context.user_data['datacenter_id'] = datacenter_id
+    context.user_data['awaiting_ip_for_renewal'] = True
+
+    await query.edit_message_text(text="Please send the IP address of the VPS:")
 
 # Set up the command and handler routes
 def setup_handlers():
     application.add_handler(CommandHandler('start', start))
-    application.add_handler(CallbackQueryHandler(register_server, pattern='register_server'))
-    application.add_handler(CallbackQueryHandler(handle_datacenter_selection, pattern='^dc_'))
-    application.add_handler(CallbackQueryHandler(admin_features, pattern='admin_features'))
+    application.add_handler(MessageHandler(filters.Regex('^Register Server$'), handle_register_server_button))
+    application.add_handler(MessageHandler(filters.Regex('^My Servers$'), handle_my_servers_button))
+    application.add_handler(MessageHandler(filters.Regex('^Add Bandwidth$'), handle_add_bandwidth_button))
+    application.add_handler(MessageHandler(filters.Regex('^Renewal Server$'), handle_renewal_button))
+    application.add_handler(CallbackQueryHandler(handle_datacenter_selection, pattern='^(register_dc_|servers_dc_)'))
+    application.add_handler(CallbackQueryHandler(handle_add_bandwidth_datacenter_selection, pattern='^addbandwidth_dc_'))
+    application.add_handler(CallbackQueryHandler(handle_bandwidth_selection, pattern='^bandwidth_'))
+    application.add_handler(CallbackQueryHandler(handle_renewal_datacenter_selection, pattern='^renewal_dc_'))
+    application.add_handler(CallbackQueryHandler(handle_renewal_selection, pattern='^renewal_'))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_ip_address))
 
 # Start the bot

@@ -146,6 +146,18 @@ CELERY_BEAT_SCHEDULE = {
         'task': 'fetchdata.tasks.fetch_all_vps_info_task',
         'schedule': crontab(minute='*/5'),  # Executes every 5 minutes
     },
+    'check-vps-expiration-warning': {
+        'task': 'fetchdata.tasks.check_vps_expiration_warning_task',
+        'schedule': crontab(hour=0, minute=0),  # Run every day at midnight
+    },
+    'check-vps-expiration': {
+        'task': 'fetchdata.tasks.check_vps_expiration_task',
+        'schedule': crontab(hour=0, minute=0),  # Run every day at midnight
+    },
+    'check-vps-bandwidth': {
+        'task': 'fetchdata.tasks.check_vps_bandwidth_task',
+        'schedule': crontab(minute=0, hour='*/1'),  # Run every hour
+    },
 }
 
 

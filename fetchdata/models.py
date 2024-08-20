@@ -27,6 +27,7 @@ class VpsInfo(models.Model):
     vps_id = models.CharField(max_length=255, unique=True)
     datacenter = models.ForeignKey(Datacenter, on_delete=models.CASCADE, related_name='vps_info')
     ip = models.GenericIPAddressField()
+    hostname = models.CharField(max_length=255)
     start_date = models.DateTimeField()
     end_date = models.DateTimeField()
     limit_bandwidth = models.BigIntegerField(help_text="Limit bandwidth in MB or GB")

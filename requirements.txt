@@ -9,3 +9,7 @@ djangorestframework
 drf-yasg
 requests
 pillow
+cryptography
+python-telegram-bot
+django-extensions
+phpserialize

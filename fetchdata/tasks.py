@@ -56,8 +56,8 @@ class VirtualizorAdminAPI:
         
         return response.text
     
-    def list_vs(self):
-        path = 'index.php?act=vs'
+    def list_vs(self, reslen=50):
+        path = f'index.php?act=vs&reslen={reslen}'
         result = self.call(path)
         
         if result:
@@ -72,36 +72,31 @@ class VirtualizorAdminAPI:
 
 def adjust_end_date(original_start_date):
     today = datetime.now()
-    # Keep the day of the month, change the month to the current month and year
     adjusted_day = min(original_start_date.day, monthrange(today.year, today.month)[1])  # Ensure day is valid for the new month
     adjusted_start_date = original_start_date.replace(year=today.year, month=today.month, day=adjusted_day)
     return adjusted_start_date + timedelta(days=30)
 
 def fetch_and_save_vps_info(slave_server):
     api = VirtualizorAdminAPI(slave_server.ip_address, slave_server.api_key, slave_server.api_pass)
-    vps_list = api.list_vs()
+    vps_list = api.list_vs(reslen=1000)  # Fetch 1000 records instead of the default 50
 
     for vps_data in vps_list.values():
         vps_id = vps_data.get(b'vpsid').decode('utf-8')
         hostname = vps_data.get(b'hostname').decode('utf-8')
 
-        # Convert time to human-readable format
         start_time_unix = int(vps_data.get(b'time').decode('utf-8'))
         start_date = datetime.utcfromtimestamp(start_time_unix)
         new_end_date = adjust_end_date(start_date)
 
-        # Convert bandwidth values to floats
         limit_bandwidth = float(vps_data.get(b'bandwidth', b'0').decode('utf-8'))
         used_bandwidth = float(vps_data.get(b'used_bandwidth', b'0').decode('utf-8'))
 
-        # Convert to integers (e.g., in megabytes)
         limit_bandwidth = int(limit_bandwidth)
         used_bandwidth = int(used_bandwidth)
 
         for ip_key, ip_address in vps_data[b'ips'].items():
             ip = ip_address.decode('utf-8')
 
-            # Fetch the existing VpsInfo if it exists or create a new one
             vps_info, created = VpsInfo.objects.get_or_create(
                 vps_id=vps_id,
                 ip=ip,
@@ -119,17 +114,14 @@ def fetch_and_save_vps_info(slave_server):
             )
 
             if not created:
-                # Update other fields if needed but do not modify the end date
                 vps_info.hostname = hostname
                 vps_info.limit_bandwidth = limit_bandwidth
                 vps_info.used_bandwidth = used_bandwidth
                 vps_info.save()
-
                 print(f"Updated VPS Info: {vps_info}")
             else:
                 print(f"Created new VPS Info: {vps_info}")
 
-# Celery task
 @shared_task
 def fetch_all_vps_info_task():
     fetch_all_vps_info()
@@ -138,7 +130,6 @@ def fetch_all_vps_info():
     for slave_server in SlaveServer.objects.all():
         fetch_and_save_vps_info(slave_server)
 
-# Task to check for VPS expiration warnings (3 days before expiration)
 @shared_task
 def check_vps_expiration_warning_task():
     three_days_from_now = timezone.now() + timedelta(days=3)
@@ -151,7 +142,6 @@ def check_vps_expiration_warning_task():
         )
         send_telegram_message(vps.telegram_id, message)
 
-# Task to check for VPS expiration on the exact end date
 @shared_task
 def check_vps_expiration_task():
     today = timezone.now().date()
@@ -164,7 +154,6 @@ def check_vps_expiration_task():
         )
         send_telegram_message(vps.telegram_id, message)
 
-# Task to check for low bandwidth
 @shared_task
 def check_vps_bandwidth_task():
     vps_with_low_bandwidth = VpsInfo.objects.filter(is_active=True)
@@ -178,7 +167,6 @@ def check_vps_bandwidth_task():
             )
             send_telegram_message(vps.telegram_id, message)
 
-# Task to check for expired VPS and notify superadmins
 @shared_task
 def notify_superadmins_of_expired_vps_task():
     now = timezone.now()
@@ -188,15 +176,12 @@ def notify_superadmins_of_expired_vps_task():
         message = "The following VPSs have expired:\n"
         for vps in expired_vps_list:
             message += f"Hostname: {vps.hostname}, IP: {vps.ip}, End Date: {vps.end_date.strftime('%Y-%m-%d')}\n"
-            # Optionally deactivate the expired VPS
             vps.is_active = False
             vps.save()
 
-        # Send the message to all superadmins
         for telegram_id in settings.SUPERADMIN_TELEGRAM_IDS:
             send_telegram_message(telegram_id, message)
 
-# Utility function to send a Telegram message
 def send_telegram_message(telegram_id, message):
     token = settings.TELEGRAM_BOT_TOKEN
     url = f"https://api.telegram.org/bot{token}/sendMessage"
